@@ -6,7 +6,7 @@ const https = require('https');
 const http = require('http');
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' })); // MP3s can be ~3-5MB as base64
 
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -31,6 +31,12 @@ function downloadFile(url, dest) {
       reject(err);
     });
   });
+}
+
+// Write base64 audio string to a local file (when voiceover comes from n8n directly)
+function writeBase64Audio(base64String, dest) {
+  const buffer = Buffer.from(base64String, 'base64');
+  fs.writeFileSync(dest, buffer);
 }
 
 // Run an ffmpeg command, returns stdout+stderr on success
@@ -109,7 +115,7 @@ app.post('/render-reel', async (req, res) => {
 });
 
 // ─── Core rendering logic ─────────────────────────────────────────────────────
-async function processReel({ voiceover_url, background_url, caption_text, webhook_url }) {
+async function processReel({ voiceover_url, voiceover_base64, background_url, caption_text, webhook_url }) {
   const id = Date.now() + '_' + Math.random().toString(36).slice(2, 7);
   const bgPath  = path.join(TEMP_DIR, `bg_${id}.mp4`);
   const voPath  = path.join(TEMP_DIR, `vo_${id}.mp3`);
@@ -117,11 +123,18 @@ async function processReel({ voiceover_url, background_url, caption_text, webhoo
   const outPath = path.join(TEMP_DIR, `reel_${id}.mp4`);
 
   try {
-    console.log(`[${id}] Downloading background + voiceover...`);
-    await Promise.all([
-      downloadFile(background_url, bgPath),
-      downloadFile(voiceover_url, voPath),
-    ]);
+    // Audio: accept base64 string (no hosting needed) or a public URL as fallback
+    if (voiceover_base64) {
+      console.log(`[${id}] Writing base64 voiceover to disk...`);
+      writeBase64Audio(voiceover_base64, voPath);
+    } else if (voiceover_url) {
+      console.log(`[${id}] Downloading voiceover from URL...`);
+      await downloadFile(voiceover_url, voPath);
+    } else {
+      throw new Error('Must provide either voiceover_base64 or voiceover_url');
+    }
+    console.log(`[${id}] Downloading background video...`);
+    await downloadFile(background_url, bgPath);
 
     // ── Get voiceover duration so we know how long the video should be ──
     const durationRaw = await new Promise((resolve, reject) => {
