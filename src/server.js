@@ -93,10 +93,10 @@ app.get('/', (req, res) => res.send('🎬 ReelForge is alive'));
  * — OR fires webhook and returns { "status": "processing" } immediately
  */
 app.post('/render-reel', async (req, res) => {
-  const { voiceover_url, background_url, caption_text, webhook_url } = req.body;
+  const { voiceover_base64, background_url, caption_text, webhook_url } = req.body;
 
-  if (!voiceover_url || !background_url || !caption_text) {
-    return res.status(400).json({ error: 'Missing voiceover_url, background_url, or caption_text' });
+  if (!voiceover_base64 || !background_url || !caption_text) {
+    return res.status(400).json({ error: 'Missing voiceover_base64, background_url, or caption_text' });
   }
 
   // If a webhook URL is given, respond immediately and process in background
