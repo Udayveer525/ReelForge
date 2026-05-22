@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: reel-forge
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false   # you fill this in the Render dashboard
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: PORT
+        value: 3000
+    healthCheckPath: /ping
