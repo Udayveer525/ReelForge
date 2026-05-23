@@ -203,10 +203,11 @@ async function processReel({ voiceover_base64, background_url, caption_text, web
       `vignette=PI/4,`,
       // Burn in subtitles
       `subtitles='${subPath.replace(/\\/g, '/')}':force_style='${subtitleStyle}'"`,
-      `-c:v libx264 -preset fast -crf 23`,     // good quality, reasonable size
-      `-c:a aac -b:a 192k`,
+      `-c:v libx264 -preset ultrafast -crf 26`,
+      `-c:a aac -b:a 128k`,
       `-map 0:v:0 -map 1:a:0`,                 // video from bg, audio from voiceover
-      `-movflags +faststart`,                   // web-optimised
+      `-movflags +faststart`,
+      `-threads 1`,
       `"${outPath}"`,
     ].join(' ');
 
