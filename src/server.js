@@ -35,8 +35,12 @@ function downloadFile(url, dest) {
 
 // Write base64 audio string to a local file (when voiceover comes from n8n directly)
 function writeBase64Audio(base64String, dest) {
-  const buffer = Buffer.from(base64String, 'base64');
+  // Strip any data-URI prefix e.g. "data:audio/mpeg;base64,..." if present
+  const clean = base64String.includes(',') ? base64String.split(',')[1] : base64String;
+  const buffer = Buffer.from(clean, 'base64');
+  if (buffer.length < 100) throw new Error(`Decoded audio is only ${buffer.length} bytes — base64 string was likely empty or corrupt`);
   fs.writeFileSync(dest, buffer);
+  console.log(`Audio written: ${buffer.length} bytes → ${dest}`);
 }
 
 // Run an ffmpeg command, returns stdout+stderr on success
@@ -123,15 +127,16 @@ async function processReel({ voiceover_base64, background_url, caption_text, web
   const outPath = path.join(TEMP_DIR, `reel_${id}.mp4`);
 
   try {
-    // Audio: accept base64 string (no hosting needed) or a public URL as fallback
-    if (voiceover_base64) {
+    // Audio: accept base64 string (from n8n filesystem binary mode)
+    // or a public URL as fallback
+    if (voiceover_base64 && !voiceover_base64.startsWith('http')) {
       console.log(`[${id}] Writing base64 voiceover to disk...`);
       writeBase64Audio(voiceover_base64, voPath);
-    } else if (voiceover_base64) {
+    } else if (voiceover_base64 && voiceover_base64.startsWith('http')) {
       console.log(`[${id}] Downloading voiceover from URL...`);
       await downloadFile(voiceover_base64, voPath);
     } else {
-      throw new Error('Must provide either voiceover_base64 or voiceover_base64');
+      throw new Error('Must provide voiceover_base64 (base64 string or http URL)');
     }
     console.log(`[${id}] Downloading background video...`);
     await downloadFile(background_url, bgPath);
