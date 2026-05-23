@@ -82,7 +82,7 @@ app.get('/', (req, res) => res.send('🎬 ReelForge is alive'));
  * POST /render-reel
  * Body:
  * {
- *   "voiceover_url": "https://...",   // ElevenLabs MP3
+ *   "voiceover_base64": "https://...",   // ElevenLabs MP3
  *   "background_url": "https://...",  // Pexels MP4
  *   "caption_text":  "...",           // Words shown as subtitle
  *   "webhook_url":   "https://..."    // n8n webhook to receive the final MP4 URL (optional)
@@ -102,11 +102,11 @@ app.post('/render-reel', async (req, res) => {
   // If a webhook URL is given, respond immediately and process in background
   if (webhook_url) {
     res.json({ status: 'processing', message: 'Reel rendering started. Webhook will fire when done.' });
-    processReel({ voiceover_url, background_url, caption_text, webhook_url });
+    processReel({ voiceover_base64, background_url, caption_text, webhook_url });
   } else {
     // Synchronous mode — wait for the reel and return the URL
     try {
-      const result = await processReel({ voiceover_url, background_url, caption_text });
+      const result = await processReel({ voiceover_base64, background_url, caption_text });
       res.json({ status: 'ok', video_url: result.video_url });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -115,7 +115,7 @@ app.post('/render-reel', async (req, res) => {
 });
 
 // ─── Core rendering logic ─────────────────────────────────────────────────────
-async function processReel({ voiceover_url, voiceover_base64, background_url, caption_text, webhook_url }) {
+async function processReel({ voiceover_base64, background_url, caption_text, webhook_url }) {
   const id = Date.now() + '_' + Math.random().toString(36).slice(2, 7);
   const bgPath  = path.join(TEMP_DIR, `bg_${id}.mp4`);
   const voPath  = path.join(TEMP_DIR, `vo_${id}.mp3`);
@@ -127,11 +127,11 @@ async function processReel({ voiceover_url, voiceover_base64, background_url, ca
     if (voiceover_base64) {
       console.log(`[${id}] Writing base64 voiceover to disk...`);
       writeBase64Audio(voiceover_base64, voPath);
-    } else if (voiceover_url) {
+    } else if (voiceover_base64) {
       console.log(`[${id}] Downloading voiceover from URL...`);
-      await downloadFile(voiceover_url, voPath);
+      await downloadFile(voiceover_base64, voPath);
     } else {
-      throw new Error('Must provide either voiceover_base64 or voiceover_url');
+      throw new Error('Must provide either voiceover_base64 or voiceover_base64');
     }
     console.log(`[${id}] Downloading background video...`);
     await downloadFile(background_url, bgPath);
