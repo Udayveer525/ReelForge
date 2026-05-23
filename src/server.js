@@ -152,60 +152,80 @@ async function processReel({ voiceover_base64, background_url, caption_text, web
     // Add 1s pad at end so it doesn't cut abruptly
     const videoDuration = audioDuration + 1;
 
-    // ── Build a simple SRT subtitle from caption_text ─────────────────────
-    // We spread words evenly across the voiceover duration for a word-by-word feel
+    // ── Build ASS subtitle file — word-by-word karaoke style ──────────────
+    // ASS gives per-word font sizing and colour — not possible in SRT
     const words = caption_text.split(/\s+/);
     const secPerWord = audioDuration / words.length;
-    let srtContent = '';
-    let srtIndex = 1;
-    const wordsPerChunk = 4; // how many words per subtitle card
-    for (let i = 0; i < words.length; i += wordsPerChunk) {
-      const chunk = words.slice(i, i + wordsPerChunk).join(' ');
+
+    // Timecode helper for ASS format (h:mm:ss.cs — centiseconds)
+    const toASS = (s) => {
+      const h  = Math.floor(s / 3600);
+      const m  = Math.floor((s % 3600) / 60);
+      const sc = Math.floor(s % 60);
+      const cs = Math.round((s % 1) * 100);
+      return `${h}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}.${String(cs).padStart(2,'0')}`;
+    };
+
+    // Auto-size: long words shrink so they never overflow 720px width
+    const fontSizeFor = (word) => {
+      const len = word.length;
+      if (len <= 8)  return 52;
+      if (len <= 12) return 44;
+      if (len <= 16) return 36;
+      return 28; // e.g. "nucleosynthesis" (15 chars) → 36, longer → 28
+    };
+
+    // 2 words per card — fast, dynamic, still readable
+    const CHUNK = 2;
+    const assEvents = [];
+    for (let i = 0; i < words.length; i += CHUNK) {
+      const chunk    = words.slice(i, i + CHUNK);
       const startSec = i * secPerWord;
-      const endSec = Math.min((i + wordsPerChunk) * secPerWord, audioDuration);
-      const toTimecode = (s) => {
-        const h = Math.floor(s / 3600).toString().padStart(2, '0');
-        const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
-        const sec = Math.floor(s % 60).toString().padStart(2, '0');
-        const ms = Math.round((s % 1) * 1000).toString().padStart(3, '0');
-        return `${h}:${m}:${sec},${ms}`;
-      };
-      srtContent += `${srtIndex}\n${toTimecode(startSec)} --> ${toTimecode(endSec)}\n${chunk}\n\n`;
-      srtIndex++;
+      const endSec   = Math.min((i + CHUNK) * secPerWord, audioDuration);
+      const fontSize = Math.min(...chunk.map(fontSizeFor));
+      const text     = chunk.join(' ');
+      // {\an2}=bottom-center anchor, {\fs}=font size, {\b1}=bold
+      // {\c}=white fill, {\3c}=black outline, {\shad3}=drop shadow, {\bord4}=thick border
+      assEvents.push(
+        `Dialogue: 0,${toASS(startSec)},${toASS(endSec)},Karaoke,,0,0,0,,{\\an2}{\\fs${fontSize}}{\\b1}{\\c&H00FFFFFF&}{\\3c&H00000000&}{\\shad3}{\\bord4}${text}`
+      );
     }
-    fs.writeFileSync(subPath, srtContent);
 
-    // ── FFmpeg: loop bg video, overlay subtitles, mix voiceover ──────────
-    // Subtitle style: big white bold text with dark shadow — cinematic dark look
-    const subtitleStyle = [
-      'FontName=Arial',
-      'FontSize=28',
-      'PrimaryColour=&H00FFFFFF',   // white text
-      'OutlineColour=&H00000000',   // black outline
-      'BackColour=&H80000000',       // semi-transparent black box
-      'Bold=1',
-      'Alignment=2',                 // bottom center
-      'MarginV=60',
-      'BorderStyle=4',               // opaque box
-      'Outline=2',
-      'Shadow=2',
-    ].join(',');
+    // ASS header — PlayRes matches our 720x1280 output
+    const assContent = [
+      '[Script Info]',
+      'ScriptType: v4.00+',
+      'PlayResX: 720',
+      'PlayResY: 1280',
+      'WrapStyle: 0',
+      '',
+      '[V4+ Styles]',
+      'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+      'Style: Karaoke,Arial,52,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,2,0,1,4,3,2,40,40,120,1',
+      '',
+      '[Events]',
+      'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+      ...assEvents,
+    ].join('\n');
 
-    // We use -stream_loop -1 to loop the background clip to match audio length
-    // -vf: scale to 1080x1920 (Reels 9:16), add blur vignette, then burn subtitles
+    const assPath = subPath.replace('.srt', '.ass');
+    fs.writeFileSync(assPath, assContent);
+
+    // ── FFmpeg ────────────────────────────────────────────────────────────────
+    // drawbox: dark semi-transparent strip in subtitle zone (y=920 to bottom)
+    // Eliminates need for vignette — lighter on CPU, more targeted
+    const safeAssPath = assPath.replace(/\\/g, '/').replace(/'/g, "'\\''" );
     const ffmpegCmd = [
       `ffmpeg -y`,
-      `-stream_loop -1 -i "${bgPath}"`,       // loop background
-      `-i "${voPath}"`,                         // voiceover
-      `-t ${videoDuration}`,                    // trim to audio length + 1s
-      `-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,`,
-      // Dark vignette overlay to make text more readable
-      `vignette=PI/4,`,
-      // Burn in subtitles
-      `subtitles='${subPath.replace(/\\/g, '/')}':force_style='${subtitleStyle}'"`,
+      `-stream_loop -1 -i "${bgPath}"`,
+      `-i "${voPath}"`,
+      `-t ${videoDuration}`,
+      `-vf "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,` +
+        `drawbox=x=0:y=920:w=720:h=360:color=black@0.55:t=fill,` +
+        `ass='${safeAssPath}'"`,
       `-c:v libx264 -preset ultrafast -crf 26`,
       `-c:a aac -b:a 128k`,
-      `-map 0:v:0 -map 1:a:0`,                 // video from bg, audio from voiceover
+      `-map 0:v:0 -map 1:a:0`,
       `-movflags +faststart`,
       `-threads 1`,
       `"${outPath}"`,
@@ -219,7 +239,8 @@ async function processReel({ voiceover_base64, background_url, caption_text, web
     const videoUrl = await uploadToCloudinary(outPath, id);
     console.log(`[${id}] Uploaded: ${videoUrl}`);
 
-    cleanup(bgPath, voPath, subPath, outPath);
+    const assPath2 = subPath.replace('.srt', '.ass');
+    cleanup(bgPath, voPath, subPath, assPath2, outPath);
 
     if (webhook_url) {
       // Fire the webhook so n8n can pick up the URL and post to Instagram
@@ -244,7 +265,8 @@ async function processReel({ voiceover_base64, background_url, caption_text, web
     return { video_url: videoUrl };
 
   } catch (err) {
-    cleanup(bgPath, voPath, subPath, outPath);
+    const assPath2 = subPath.replace('.srt', '.ass');
+    cleanup(bgPath, voPath, subPath, assPath2, outPath);
     console.error(`[${id}] Error:`, err.message);
 
     if (webhook_url) {
